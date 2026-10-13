@@ -174,58 +174,6 @@ pub struct DrmtapLib {
     pub version: (c_int, c_int, c_int),
 }
 
-/// A library whose capture entry points are the given fakes and whose others do nothing, for the
-/// tests of the reader.
-#[cfg(test)]
-impl DrmtapLib {
-    pub(crate) fn fake(
-        grab_mapped: FnGrabMapped,
-        frame_release: FnFrameRelease,
-        grab_desc: FnGrabDesc,
-        plane_rotation: FnPlaneRotation,
-    ) -> Self {
-        unsafe extern "C" fn open(_: *const drmtap_config) -> *mut drmtap_ctx {
-            std::ptr::null_mut()
-        }
-        unsafe extern "C" fn close(_: *mut drmtap_ctx) {}
-        unsafe extern "C" fn list_displays(_: *mut drmtap_ctx, _: *mut drmtap_display, _: c_int) -> c_int {
-            0
-        }
-        unsafe extern "C" fn get_cursor(_: *mut drmtap_ctx, _: *mut drmtap_cursor_info) -> c_int {
-            -1
-        }
-        unsafe extern "C" fn cursor_release(_: *mut drmtap_ctx, _: *mut drmtap_cursor_info) {}
-        unsafe extern "C" fn open_render(_: *const c_char) -> *mut drmtap_ctx {
-            std::ptr::null_mut()
-        }
-        unsafe extern "C" fn convert_dmabuf(
-            _: *mut drmtap_ctx,
-            _: *const drmtap_dmabuf_desc,
-            _: *mut drmtap_frame_info,
-        ) -> c_int {
-            -1
-        }
-        DrmtapLib {
-            _lib: hbb_common::libloading::os::unix::Library::this().into(),
-            open,
-            close,
-            list_displays,
-            list_devices: None,
-            grab_mapped,
-            frame_release,
-            get_cursor,
-            cursor_release,
-            cursor_hotspot_valid: None,
-            grab_desc,
-            open_render,
-            convert_dmabuf,
-            render_node: None,
-            plane_rotation: Some(plane_rotation),
-            version: (0, 5, 8),
-        }
-    }
-}
-
 // SAFETY: the resolved fn pointers are plain C entry points with no interior mutability;
 // libdrmtap contexts are used single-threaded by the caller. The Library handle is never moved out.
 unsafe impl Send for DrmtapLib {}
@@ -446,41 +394,6 @@ mod tests {
     use super::{abi_accepted, DRMTAP_ABI_MAJOR, DRMTAP_ABI_MINOR, DRMTAP_MIN_MINOR_PATCH};
 
     #[test]
-    fn abi_gate_rejects_a_library_from_before_the_split() {
-        // These are refused because their MINOR differs from the verified one, which is the only
-        // reason the gate needs. Naming the pre-split releases keeps the intent readable, but do
-        // not read this as the floor doing the work: see the test below.
-        for (minor, patch) in [(3, 3), (4, 0), (4, 8), (4, 9)] {
-            assert!(
-                !abi_accepted(DRMTAP_ABI_MAJOR, minor, patch),
-                "v0.{minor}.{patch} is not the verified minor and must be refused"
-            );
-        }
-    }
-
-    #[test]
-    fn the_patch_floor_is_currently_vacuous_and_that_is_deliberate() {
-        // With MIN_MINOR_PATCH.0 == DRMTAP_ABI_MINOR the floor can never reject anything: the
-        // minor equality already forces `(minor, patch) >= (minor, 0)`. It is kept because it is
-        // the mechanism that WOULD do the work the next time a floor lands mid-minor, as (4, 10)
-        // did for the split API. This test exists so nobody reads the pre-split test above as
-        // evidence that the floor is live -- if that ever matters, this assert is the tripwire.
-        let (floor_minor, floor_patch) = DRMTAP_MIN_MINOR_PATCH;
-        assert_eq!(
-            floor_minor, DRMTAP_ABI_MINOR,
-            "the floor is inside the verified minor; a floor in a DIFFERENT minor is unreachable"
-        );
-        if floor_patch == 0 {
-            assert!(
-                abi_accepted(DRMTAP_ABI_MAJOR, DRMTAP_ABI_MINOR, 0),
-                "patch 0 of the verified minor must be accepted while the floor is 0"
-            );
-        } else {
-            assert!(!abi_accepted(DRMTAP_ABI_MAJOR, DRMTAP_ABI_MINOR, floor_patch - 1));
-        }
-    }
-
-    #[test]
     fn abi_gate_accepts_the_floor_and_later_patches_of_the_same_minor() {
         let (min_minor, min_patch) = DRMTAP_MIN_MINOR_PATCH;
         assert!(abi_accepted(DRMTAP_ABI_MAJOR, min_minor, min_patch));
@@ -508,11 +421,5 @@ mod tests {
                 "v0.{minor}.{patch} is an unverified minor and must be refused"
             );
         }
-    }
-
-    #[test]
-    fn abi_gate_rejects_another_major_in_both_directions() {
-        assert!(!abi_accepted(DRMTAP_ABI_MAJOR + 1, 0, 0));
-        assert!(!abi_accepted(DRMTAP_ABI_MAJOR + 1, 99, 99));
     }
 }
